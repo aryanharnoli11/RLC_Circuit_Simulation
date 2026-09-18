@@ -1,4 +1,4 @@
-import { OBSERVATION_COLUMNS, formatObservationValue, RLC_EQUATIONS } from './reportContent.js'
+import { OBSERVATION_COLUMNS, formatObservationValue } from './reportContent.js'
 
 const escapeHtml = (value) => String(value)
   .replace(/&/g, '&amp;')
@@ -41,51 +41,6 @@ const createObservationRows = (observations) => (
       </tr>
     `).join('')
 )
-
-const createLineChart = (observations, series, yAxisLabel) => {
-  const width = 720
-  const height = 230
-  const plot = { left: 54, right: 18, top: 20, bottom: 42 }
-  const plotWidth = width - plot.left - plot.right
-  const plotHeight = height - plot.top - plot.bottom
-  const values = series.flatMap(({ key }) => observations.map((row) => toNumber(row[key])))
-  const maximumValue = Math.max(1, ...values)
-  const yMaximum = maximumValue * 1.1
-  const xForIndex = (index) => plot.left + (observations.length <= 1 ? plotWidth / 2 : (index / (observations.length - 1)) * plotWidth)
-  const yForValue = (value) => plot.top + plotHeight - (toNumber(value) / yMaximum) * plotHeight
-  const gridLines = Array.from({ length: 5 }, (_, index) => {
-    const ratio = index / 4
-    const y = plot.top + ratio * plotHeight
-    const label = yMaximum * (1 - ratio)
-    return `<line x1="${plot.left}" y1="${y.toFixed(2)}" x2="${width - plot.right}" y2="${y.toFixed(2)}" class="chart-grid-line"/><text x="${plot.left - 8}" y="${(y + 3).toFixed(2)}" text-anchor="end" class="chart-axis-label">${formatNumber(label, label >= 10 ? 0 : 1)}</text>`
-  }).join('')
-  const xLabels = observations.map((_, index) => (
-    `<text x="${xForIndex(index).toFixed(2)}" y="${height - 18}" text-anchor="middle" class="chart-axis-label">${index + 1}</text>`
-  )).join('')
-  const svgPaths = series.map(({ color, key }) => {
-    const points = observations.map((row, index) => `${xForIndex(index).toFixed(2)},${yForValue(row[key]).toFixed(2)}`).join(' ')
-    const markers = observations.map((row, index) => (
-      `<circle cx="${xForIndex(index).toFixed(2)}" cy="${yForValue(row[key]).toFixed(2)}" r="3" fill="${color}"/>`
-    )).join('')
-    return `<polyline points="${points}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>${markers}`
-  }).join('')
-  const legend = series.map(({ color, label }) => (
-    `<span class="graph-legend-item"><i style="background:${color}"></i>${label}</span>`
-  )).join('')
-
-  return `
-    <svg class="report-graph" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(yAxisLabel)} by reading number">
-      ${gridLines}
-      <line x1="${plot.left}" y1="${plot.top}" x2="${plot.left}" y2="${height - plot.bottom}" class="chart-axis"/>
-      <line x1="${plot.left}" y1="${height - plot.bottom}" x2="${width - plot.right}" y2="${height - plot.bottom}" class="chart-axis"/>
-      ${xLabels}
-      ${svgPaths}
-      <text x="${width / 2}" y="${height - 2}" text-anchor="middle" class="chart-axis-title">Reading number</text>
-      <text x="14" y="${height / 2}" text-anchor="middle" class="chart-axis-title" transform="rotate(-90 14 ${height / 2})">${escapeHtml(yAxisLabel)}</text>
-    </svg>
-    <div class="graph-legend">${legend}</div>
-  `
-}
 
 // Columns for the verified-reading table, matching the
 // observation table's Excel-style headings (label on top, unit below).
@@ -153,20 +108,6 @@ export const createReportHtml = ({
   const durationText = getSessionDurationText(sessionStart, sessionEnd)
   const observationRows = createObservationRows(observations)
   const theoreticalRows = createTheoreticalRows(theoreticalCalculations?.filter((row) => row?.observationIndex < observations.length))
-  const parameterList = [['R', 'r', 'kΩ'], ['L', 'l', 'H'], ['C', 'c', 'µF'], ['V', 'voltage', 'V']]
-    .map(([label, key, unit]) => `<li>${label} = ${[...new Set(observations.map((row) => row[key]).filter((value) => value != null && value !== ''))].map((value) => `${escapeHtml(value)} ${unit}`).join(', ') || '—'}</li>`).join('')
-  const voltageGraph = createLineChart(observations, [
-    { key: 'vR', label: 'V<sub>R</sub>', color: '#2563eb' },
-    { key: 'vL', label: 'V<sub>L</sub>', color: '#d97706' },
-    { key: 'vC', label: 'V<sub>C</sub>', color: '#7c3aed' },
-  ], 'Voltage (V)')
-  const currentGraph = createLineChart(observations, [
-    { key: 'current', label: 'Current', color: '#0f766e' },
-  ], 'Current (mA)')
-  const powerGraph = createLineChart(observations, [
-    { key: 'power', label: 'Power', color: '#b42318' },
-  ], 'Power (W)')
-
   const css = `
 .equation-fraction { display: inline-grid; vertical-align: middle; text-align: center; }
 .equation-fraction i { font-style: normal; padding: 0 4px; }
@@ -211,6 +152,11 @@ body {
 }
 .report-page:last-of-type {
   margin-bottom: 0;
+}
+.report-print-grid,
+.report-print-sidebar,
+.report-print-results {
+  display: contents;
 }
 .report-page--results {
   break-before: page;
@@ -866,6 +812,239 @@ body.pdf-exporting {
     overflow: visible;
   }
 }
+
+/* The downloaded PDF uses the same single-sheet portrait composition as the
+   browser print dialog. */
+body.pdf-exporting {
+  width: 210mm;
+  height: 297mm;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: #fff;
+  font-size: 8.2px;
+  line-height: 1.2;
+}
+.pdf-exporting .report-document,
+.pdf-exporting .report-page {
+  width: 210mm;
+  height: 297mm;
+  min-height: 297mm;
+}
+.pdf-exporting .report-page {
+  display: grid;
+  grid-template-rows: 17mm minmax(0, 1fr);
+  gap: 2.5mm;
+  margin: 0;
+  padding: 5mm;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.pdf-exporting .header-row {
+  display: grid;
+  grid-template-columns: 35mm minmax(0, 1fr) 18mm;
+  gap: 3mm;
+  height: 17mm;
+  margin: 0;
+}
+.pdf-exporting .report-logo,
+.pdf-exporting .report-logo--virtual-labs,
+.pdf-exporting .report-logo--iit {
+  max-width: 35mm;
+  max-height: 14mm;
+}
+.pdf-exporting .report-title-block { padding-bottom: 2px; }
+.pdf-exporting .report-title-block h1 { font-size: 16px; }
+.pdf-exporting .report-print-grid {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 2.5mm;
+  overflow: hidden;
+}
+.pdf-exporting .report-print-sidebar,
+.pdf-exporting .report-print-results {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: 2.5mm;
+}
+.pdf-exporting .section {
+  margin: 0;
+  padding: 2.5mm 3mm;
+  border-radius: 2mm;
+}
+.pdf-exporting .report-summary { flex: 0 0 auto; }
+.pdf-exporting .report-conclusion { flex: 0 0 auto; }
+.pdf-exporting .report-observations { flex: 0 0 auto; }
+.pdf-exporting .report-verification { flex: 0 0 auto; }
+.pdf-exporting .section > h2:first-child {
+  margin-bottom: 1.4mm;
+  padding-bottom: 1mm;
+}
+.pdf-exporting h2 { margin-bottom: 1.4mm; font-size: 11px; }
+.pdf-exporting h3 { margin-bottom: 1mm; font-size: 9.5px; }
+.pdf-exporting p,
+.pdf-exporting li { margin-bottom: 0.7mm; font-size: 8px; }
+.pdf-exporting .report-overview-top { gap: 1mm; margin-bottom: 1mm; }
+.pdf-exporting .report-stamp,
+.pdf-exporting .badge { padding: 1mm 1.4mm; font-size: 6.5px; }
+.pdf-exporting .report-experiment-label { margin-bottom: 0.5mm; font-size: 6px; }
+.pdf-exporting .report-experiment-title { margin-bottom: 1.2mm; font-size: 10px; }
+.pdf-exporting .info-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1mm;
+  margin-top: 1mm;
+}
+.pdf-exporting .info-card { gap: 0.3mm; padding: 1mm; font-size: 7px; }
+.pdf-exporting ul,
+.pdf-exporting .two-column-list { margin-top: 0.8mm; padding-left: 3mm; }
+.pdf-exporting .two-column-list { column-count: 2; column-gap: 3mm; }
+.pdf-exporting .results-stack { gap: 1mm; }
+.pdf-exporting .results-card { gap: 1mm; padding: 0; }
+.pdf-exporting .table-shell { overflow: hidden; }
+.pdf-exporting .compact-table { display: table; width: 100%; table-layout: fixed; }
+.pdf-exporting .compact-table thead { display: table-header-group; }
+.pdf-exporting .compact-table tbody { display: table-row-group; }
+.pdf-exporting .compact-table tr { display: table-row; }
+.pdf-exporting .compact-table th,
+.pdf-exporting .compact-table td {
+  display: table-cell;
+  padding: 1.4mm 0.65mm;
+  font-size: 7.4px;
+  line-height: 1.05;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+.pdf-exporting .compact-table td::before { display: none; content: none; }
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 0;
+  }
+  html,
+  body {
+    width: 210mm;
+    height: 297mm;
+    min-width: 210mm;
+    min-height: 297mm;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+  body {
+    background: #fff;
+    font-size: 8.2px;
+    line-height: 1.2;
+  }
+  .report-document,
+  .report-page {
+    width: 210mm;
+    height: 297mm;
+    min-height: 297mm;
+  }
+  .report-page {
+    display: grid;
+    grid-template-rows: 17mm minmax(0, 1fr);
+    gap: 2.5mm;
+    margin: 0;
+    padding: 5mm;
+    overflow: hidden;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    break-inside: auto;
+    page-break-inside: auto;
+  }
+  .header-row {
+    display: grid;
+    grid-template-columns: 35mm minmax(0, 1fr) 18mm;
+    gap: 3mm;
+    height: 17mm;
+    margin: 0;
+  }
+  .report-logo,
+  .report-logo--virtual-labs,
+  .report-logo--iit {
+    max-width: 35mm;
+    max-height: 14mm;
+  }
+  .report-title-block { padding-bottom: 2px; }
+  .report-title-block h1 { font-size: 16px; }
+  .report-print-grid {
+    display: grid;
+    min-width: 0;
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr);
+    align-content: start;
+    gap: 2.5mm;
+    overflow: hidden;
+  }
+  .report-print-sidebar,
+  .report-print-results {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex-direction: column;
+    gap: 2.5mm;
+  }
+  .section {
+    margin: 0;
+    padding: 2.5mm 3mm;
+    border-radius: 2mm;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .report-summary { flex: 0 0 auto; }
+  .report-conclusion,
+  .report-observations,
+  .report-verification { flex: 0 0 auto; }
+  .section > h2:first-child {
+    margin-bottom: 1.4mm;
+    padding-bottom: 1mm;
+  }
+  h2 { margin-bottom: 1.4mm; font-size: 11px; }
+  h3 { margin-bottom: 1mm; font-size: 9.5px; }
+  p,
+  li { margin-bottom: 0.7mm; font-size: 8px; }
+  .report-overview-top { gap: 1mm; margin-bottom: 1mm; }
+  .report-stamp,
+  .badge { padding: 1mm 1.4mm; font-size: 6.5px; }
+  .report-experiment-label { margin-bottom: 0.5mm; font-size: 6px; }
+  .report-experiment-title { margin-bottom: 1.2mm; font-size: 10px; }
+  .info-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1mm;
+    margin-top: 1mm;
+  }
+  .info-card { gap: 0.3mm; padding: 1mm; font-size: 7px; }
+  ul,
+  .two-column-list { margin-top: 0.8mm; padding-left: 3mm; }
+  .two-column-list { column-count: 2; column-gap: 3mm; }
+  .results-stack { gap: 1mm; }
+  .results-card { gap: 1mm; padding: 0; }
+  .table-shell { overflow: hidden; }
+  .compact-table { display: table; width: 100%; table-layout: fixed; }
+  .compact-table thead { display: table-header-group; }
+  .compact-table tbody { display: table-row-group; }
+  .compact-table tr { display: table-row; }
+  .compact-table th,
+  .compact-table td {
+    display: table-cell;
+    padding: 1.4mm 0.65mm;
+    font-size: 7.4px;
+    line-height: 1.05;
+    word-break: normal;
+    overflow-wrap: anywhere;
+  }
+  .compact-table td::before { display: none; content: none; }
+}
   `
 
   return `
@@ -889,6 +1068,8 @@ body.pdf-exporting {
       <img src="${escapeHtml(iitLogoSrc)}" class="report-logo report-logo--iit" alt="Indian Institute of Technology Roorkee logo">
     </div>
 
+    <div class="report-print-grid">
+      <div class="report-print-sidebar">
     <div class="section report-overview">
       <div class="report-overview-top">
         <p class="badge">AI-Enhanced Basic Electrical Science Lab</p>
@@ -903,7 +1084,7 @@ body.pdf-exporting {
       </div>
     </div>
 
-    <div class="section">
+    <div class="section report-summary">
       <h3>Simulation Summary</h3>
       <p>The guided walkthrough familiarised the user with the simulation's interface. The circuit was connected, and the connections were verified successfully. The MCB was switched ON, and the desired voltage was set using the autotransformer. The readings were measured using the voltmeters, ammeter, and wattmeter for different RLC combinations, and these measured values were used to calculate the error analysis. Finally, the calculated values were verified, and the performance of the series RLC circuit was analysed successfully. </p>
       <p>${observations.length} observation readings were recorded. The tables below contain the recorded component selections and measurements, together with the theoretical values entered for the selected readings.</p>
@@ -924,7 +1105,14 @@ body.pdf-exporting {
       </ul>     
     </div>
 
-    <div class="section results-section">
+    <div class="section report-conclusion">
+      <h3>Conclusion</h3>
+      <p style="text-align: justify;">The voltage, current, power, and power factor of the series RLC circuit were successfully measured and analyzed.</p>
+    </div>
+      </div>
+
+      <div class="report-print-results">
+    <div class="section results-section report-observations">
       <h2>Observation Table</h2>
       <div class="results-stack">
         <div class="results-card">
@@ -944,7 +1132,7 @@ body.pdf-exporting {
       </div>
     </div>
 
-    <div class="section results-section">
+    <div class="section results-section report-verification">
       <h2>Theoretical Verification and Error Analysis</h2>
       <div class="results-stack">
         <div class="results-card">
@@ -957,13 +1145,7 @@ body.pdf-exporting {
         </div>
       </div>
     </div>
-  </div>
-
-  <div class="report-page report-page--results">
-
-    <div class="section">
-      <h3>Conclusion</h3>
-      <p style="text-align: justify;">The voltage, current, power, and power factor of the series RLC circuit were successfully measured and analyzed.</p>
+      </div>
     </div>
   </div>
   </main>
@@ -1004,7 +1186,6 @@ body.pdf-exporting {
           jsPDF: { unit: 'in', format: 'a4', orientation: 'portrait' },
           pagebreak: {
             mode: ['css', 'legacy'],
-            before: ['.report-page--results'],
             avoid: ['.header-row', '.report-overview', '.info-grid', '.graph-card', 'thead', 'tr']
           }
         };
